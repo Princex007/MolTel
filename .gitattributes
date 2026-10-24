@@ -1,0 +1,3 @@
+# The backend starts on Linux hosts from a Procfile, so shell-sensitive files
+# must stay LF no matter what a Windows checkout does locally.
+* text=auto eol=lf

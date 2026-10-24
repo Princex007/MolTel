@@ -1,0 +1,36 @@
+EVIDENCE GAP IDENTIFICATION INSTRUCTIONS
+
+When identifying evidence gaps, look specifically for:
+
+1. MISSING CLINICAL DATA
+   - No human clinical trial data available
+   - Evidence exists only from preclinical (in vitro / animal) studies
+   - No Phase II or Phase III trials completed
+   - No randomized controlled trial data
+
+2. POPULATION GAPS
+   - Studies limited to a specific demographic (e.g., adult males only)
+   - Lack of data in pediatric, elderly, or diverse ethnic populations
+   - No data in patients with comorbidities common to the target condition
+
+3. COMPARATIVE EFFECTIVENESS
+   - No head-to-head comparisons with existing standard-of-care treatments
+   - Only placebo-controlled data, no active comparator trials
+   - Long-term comparative outcomes not studied
+
+4. MECHANISTIC GAPS
+   - Mechanism of action proposed but not confirmed in humans
+   - Target engagement demonstrated in vitro but not in vivo
+   - Biomarker for response not identified or validated
+
+5. SAFETY GAPS
+   - Long-term safety data unavailable
+   - Drug-drug interaction studies not conducted
+   - No data on reproductive toxicity or special populations
+
+6. REGULATORY GAPS
+   - Not approved for the indication under study
+   - Orphan drug designation not pursued despite rare disease context
+   - Bioequivalence or biosimilarity data absent
+
+Present identified gaps factually and concisely. Do not speculate beyond what the absence of evidence implies.

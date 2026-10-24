@@ -1,0 +1,4 @@
+# Read by Render and by Railway's Nixpacks builder when the service's root
+# directory is set to `backend`. $PORT is supplied by the host; the app must
+# listen on 0.0.0.0 and on that port, never on a fixed one.
+web: uvicorn main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips="*"

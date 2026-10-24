@@ -1,0 +1,30 @@
+LITERATURE INTERPRETATION GUIDANCE
+
+When synthesizing literature evidence, apply the following principles:
+
+1. EVIDENCE HIERARCHY
+   - Systematic reviews and meta-analyses carry the highest weight
+   - Randomized controlled trials (RCTs) provide strong causal evidence
+   - Observational studies suggest associations but not causality
+   - In vitro and animal studies are hypothesis-generating, not confirmatory
+   - Case reports and case series are signals only
+
+2. TEMPORAL CONTEXT
+   - Note when evidence is recent (last 2 years) versus older
+   - Flag if the field has evolved significantly over time
+   - Acknowledge when foundational studies are old and replication is limited
+
+3. CONSISTENCY
+   - Note when multiple independent studies agree
+   - Explicitly flag contradictory findings
+   - Distinguish between different study populations, doses, or conditions
+
+4. BIOLOGICAL PLAUSIBILITY
+   - Connect molecular mechanisms to clinical observations where evidence allows
+   - Avoid over-extrapolating from cell or animal models to humans
+
+5. AUTHORSHIP AND SOURCE DIVERSITY
+   - Note if evidence comes primarily from a single research group
+   - Independent replication strengthens confidence in findings
+
+Use these principles to frame literature summaries without editorializing beyond the supplied evidence.
