@@ -280,6 +280,21 @@ So the backend is deployed first, its URL is given to the frontend, and the
 frontend's origin is then added to the backend. Changing the backend URL later
 means rebuilding the frontend — an env edit alone will not do it.
 
+### Live deployment
+
+| Surface | URL | Notes |
+| --- | --- | --- |
+| Frontend | `https://moltel.vercel.app` | Vercel project `moltel`, Root Directory `frontend` |
+| Backend | `https://moltel-backend.onrender.com` | Render blueprint `moltel`, free instance |
+
+The free Render instance **spins down when idle**, so the first request after a
+quiet period can take around 50 seconds; a search may show its loading state for
+that long. `OPENROUTER_API_KEY` is deliberately not set on the deployed backend,
+so every dossier is served data-only and says so on screen — see
+[Limitations](#limitations). `FRONTEND_ORIGIN` on Render allows
+`https://moltel.vercel.app` and `https://moltel-git-main-lse-ngine.vercel.app`;
+any other origin, including a per-deployment Vercel preview URL, is refused.
+
 ### 1. Push the repository to GitHub
 
 ```bash
