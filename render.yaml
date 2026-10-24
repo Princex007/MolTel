@@ -24,8 +24,10 @@ services:
       - key: OPENROUTER_API_KEY
         sync: false
       # Exact origin(s) of the deployed frontend, comma-separated. Without this
-      # the browser cannot read the API at all.
+      # the browser cannot read the API at all. Vercel gives every deployment
+      # preview its own random *.vercel.app URL; those are not listed here, so
+      # preview deploys cannot call the API — only the domains below can.
       - key: FRONTEND_ORIGIN
-        sync: false
+        value: https://moltel.vercel.app,https://moltel-git-main-lse-ngine.vercel.app
       - key: NCBI_EMAIL
         sync: false
