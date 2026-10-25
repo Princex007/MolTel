@@ -16,9 +16,12 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.13.0
-      # A free-tier key only: paid models answer HTTP 402.
+      # A free-tier key only: paid models answer HTTP 402. This exact ID must
+      # stay a working ":free" route — nemotron-3-super-120b-a12b:free is listed
+      # by /api/v1/models but its Nvidia provider answers HTTP 404, which silently
+      # drops every dossier to the data-only fallback.
       - key: OPENROUTER_MODEL
-        value: nvidia/nemotron-3-super-120b-a12b:free
+        value: nvidia/nemotron-3.5-lightning:free
       # Left unset, the app still works and says plainly that AI synthesis was
       # not produced. Set it in the dashboard, never commit it.
       - key: OPENROUTER_API_KEY
