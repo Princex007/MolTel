@@ -108,7 +108,7 @@ cp .env.local.example .env.local
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `OPENROUTER_API_KEY` | No | — | Your OpenRouter API key. Without it every record, table, chart and export is still produced, and the dossier states that AI synthesis was unavailable |
-| `OPENROUTER_MODEL` | No | `openrouter/auto` | OpenRouter model identifier. A free-tier key only accepts `:free` models — `openrouter/auto` and other paid models answer HTTP 402 |
+| `OPENROUTER_MODEL` | No | `openrouter/auto` | OpenRouter model identifier. A free-tier key only accepts `:free` models — `openrouter/auto` and other paid models answer HTTP 402. A `:free` ID can also be listed by `/api/v1/models` yet 404 at its upstream provider, which silently produces a data-only dossier, so verify one real completion before relying on it |
 | `FRONTEND_ORIGIN` | No | `http://localhost:3000` | Comma-separated list of allowed CORS origins. The browser calls the API directly, so an origin left out here cannot read results |
 | `NCBI_EMAIL` | No | — | Email for NCBI E-utilities (recommended) |
 
@@ -289,11 +289,19 @@ means rebuilding the frontend — an env edit alone will not do it.
 
 The free Render instance **spins down when idle**, so the first request after a
 quiet period can take around 50 seconds; a search may show its loading state for
-that long. `OPENROUTER_API_KEY` is deliberately not set on the deployed backend,
-so every dossier is served data-only and says so on screen — see
-[Limitations](#limitations). `FRONTEND_ORIGIN` on Render allows
-`https://moltel.vercel.app` and `https://moltel-git-main-lse-ngine.vercel.app`;
-any other origin, including a per-deployment Vercel preview URL, is refused.
+that long. A request that arrives while the instance is still starting can also
+return **HTTP 502** — retrying once is enough. `OPENROUTER_API_KEY` is stored in
+the Render dashboard only (it is `sync: false`, so it can never come from the
+repo), and the deployed site serves AI-synthesized narratives. `FRONTEND_ORIGIN`
+on Render allows `https://moltel.vercel.app` and
+`https://moltel-git-main-lse-ngine.vercel.app`; any other origin, including a
+per-deployment Vercel preview URL, is refused.
+
+Setting the key is not enough on its own: the model must also be one that
+answers. `nvidia/nemotron-3-super-120b-a12b:free` appears in OpenRouter's
+`/api/v1/models` catalogue yet its upstream provider returns HTTP 404 for every
+request, and the app then takes its honest data-only fallback rather than
+failing loudly. `render.yaml` now pins `nvidia/nemotron-3.5-lightning:free`.
 
 ### 1. Push the repository to GitHub
 
@@ -318,8 +326,13 @@ Render → New → Blueprint → pick the repo; `render.yaml` defines the servic
 |---|---|
 | `FRONTEND_ORIGIN` | the exact frontend origin(s), comma-separated — e.g. `https://moltel.vercel.app,https://preview-xyz.moltel.vercel.app` |
 | `OPENROUTER_API_KEY` | secret, set in the dashboard only |
-| `OPENROUTER_MODEL` | a `:free` variant; paid models answer HTTP 402 |
+| `OPENROUTER_MODEL` | a `:free` variant that actually answers; see the 404 note above |
 | `NCBI_EMAIL` | optional; raises the E-utilities limit from 3 to 10 req/s |
+
+Only `sync: false` keys (`OPENROUTER_API_KEY`, `NCBI_EMAIL`) are set from the
+dashboard. Anything `render.yaml` declares is blueprint-managed: the Environment
+page accepts typing into those rows but silently discards the value, so change
+the repo file and run **Manual sync → Approve** instead.
 
 It starts from `backend/Procfile`
 (`uvicorn main:app --host 0.0.0.0 --port $PORT --proxy-headers --forwarded-allow-ips="*"`)
