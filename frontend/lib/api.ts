@@ -141,6 +141,17 @@ export interface TrialIntervention {
   name: string;
   /** The registry's own code: DRUG, BIOLOGICAL, DEVICE, BEHAVIORAL, … */
   type: string | null;
+  description: string | null;
+  arm_group_labels: string[];
+  /** The arm role the registry states for this intervention, or null if silent. */
+  role: string | null;
+}
+
+export interface TrialArmGroup {
+  label: string;
+  /** EXPERIMENTAL | ACTIVE_COMPARATOR | PLACEBO_COMPARATOR | SHAM_COMPARATOR | OTHER */
+  type: string | null;
+  intervention_names: string[];
 }
 
 export interface TrialCollaborator {
@@ -156,6 +167,7 @@ export interface ClinicalTrial {
   conditions: string[];
   interventions: string[];
   intervention_details: TrialIntervention[];
+  arm_groups: TrialArmGroup[];
   collaborators: TrialCollaborator[];
   sponsor: string | null;
   study_type: string | null;
@@ -206,10 +218,23 @@ export interface TrialStartPeriod {
   count: number;
 }
 
+export interface StatusGroup {
+  category: string;
+  label: string;
+  /** Names the registry statuses folded into this heading, in the heading itself. */
+  definition: string;
+  registry_statuses: string[];
+  count: number;
+}
+
 export interface TrialAnalytics {
   total_trials: number;
   ongoing_trials: number;
+  /** Strictly the registry status RECRUITING. */
   recruiting_trials: number;
+  enrolling_by_invitation_trials: number;
+  /** The derived category: RECRUITING plus ENROLLING_BY_INVITATION. */
+  currently_recruiting_trials: number;
   active_not_recruiting_trials: number;
   not_yet_recruiting_trials: number;
   completed_trials: number;
@@ -220,6 +245,10 @@ export interface TrialAnalytics {
   trials_by_phase: ChartBucket[];
   ongoing_trials_by_phase: ChartBucket[];
   trials_by_status: StatusBucket[];
+  status_groups: StatusGroup[];
+  ongoing_definition: string;
+  exclusive_status_total: number;
+  statuses_reconcile: boolean;
   trial_starts_by_period: TrialStartPeriod[];
   timeline_granularity: string | null;
   timeline_omitted_reason: string | null;
@@ -238,6 +267,8 @@ export interface CandidateRecord {
   name: string;
   matched_names: string[];
   intervention_types: string[];
+  /** Arm roles the registry states wherever this product is registered. */
+  registry_roles: string[];
   trials: number;
   nct_ids: string[];
   phases: CandidatePhaseBucket[];
@@ -362,9 +393,19 @@ export interface EvidenceCategory {
   key: string;
   label: string;
   count: number;
+  /** What one unit of this count is: an evidence record, a publication, a label passage. */
+  unit: string;
   /** The rule MolTel used to place records here, stated by the backend. */
   criteria: string;
   records: string[];
+}
+
+export interface StudyDesignCount {
+  label: string;
+  definition: string;
+  count: number;
+  records: string[];
+  denominator: string;
 }
 
 export interface EvidenceStrength {
@@ -374,6 +415,80 @@ export interface EvidenceStrength {
   limitations: string[];
   unclassified_count: number;
   automated: boolean;
+  total_records: number;
+  publication_records: number;
+  regulatory_passages: number;
+  mutually_exclusive: boolean;
+  /** The set every class count is taken against, spelled out. */
+  denominator: string;
+  reconciles: boolean;
+  study_design_counts: StudyDesignCount[];
+}
+
+export interface AttributionCategory {
+  key: string;
+  label: string;
+  count: number;
+  /** What puts a trial in this row, stated with its count. */
+  basis: string;
+}
+
+export interface QueryAttribution {
+  nct_id: string;
+  title: string | null;
+  category: string;
+  category_label: string;
+  basis: string;
+  matched_interventions: string[];
+  registry_roles: string[];
+  source_url: string | null;
+}
+
+export interface QueryAttributionSummary {
+  query: string;
+  applicable: boolean;
+  reason: string | null;
+  distinct_trials: number;
+  direct_trials: number;
+  comparator_or_combination_trials: number;
+  query_specific_trials: number;
+  related_not_named_trials: number;
+  not_demonstrably_relevant_trials: number;
+  categories: AttributionCategory[];
+  records: QueryAttribution[];
+  excluded_nct_ids: string[];
+  distinct_intervention_names: number;
+  placebo_or_sham_arms: number;
+  distinct_investigational_candidates: number;
+  placebo_or_sham_names: string[];
+  rule: string;
+  reconciliation_note: string;
+}
+
+export interface ValidationFinding {
+  rule: string;
+  severity: "error" | "warning";
+  field: string;
+  quote: string;
+  expected: string | null;
+  observed: string | null;
+  source_ref: string | null;
+  suggested_correction: string | null;
+  status: string;
+  blocks_publication: boolean;
+}
+
+export interface ValidationReport {
+  errors: number;
+  warnings: number;
+  blocked: boolean;
+  findings: ValidationFinding[];
+  rules_run: string[];
+  checked_fields: string[];
+  generated_at: string | null;
+  note: string;
+  override: boolean;
+  override_reason: string | null;
 }
 
 export interface Contradiction {
@@ -462,6 +577,12 @@ export interface DossierResponse {
   evidence_strength: EvidenceStrength | null;
   trial_analytics: TrialAnalytics | null;
   candidate_analytics: CandidateAnalytics | null;
+  // Which retrieved trials the registry itself links to the query. A registry
+  // hit is not an attribution, so this is what a "studies of X" number may come from.
+  query_attribution: QueryAttributionSummary | null;
+  // Pre-publication gate over the narrative. Rendered, not applied silently.
+  validation: ValidationReport | null;
+  publication_blocked: boolean;
   // Only for a disease search: the canonical term, synonyms and subtypes built
   // from the records above. A compound query has no subtype to resolve.
   disease_analytics: DiseaseAnalytics | null;

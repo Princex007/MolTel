@@ -335,6 +335,10 @@ async def test_a_disease_query_skips_the_product_lookups_but_still_reports_succe
     orchestrator = ResearchOrchestrator()
 
     async def synthesized(**kwargs):
+        # The derived aggregates are inputs to the real generator's prompt only;
+        # this stub builds the dossier from the records themselves.
+        for aggregate in ("analytics", "strength", "attribution"):
+            kwargs.pop(aggregate, None)
         return DossierResult(
             dossier=build_data_dossier(**kwargs, reason="synthesis stubbed"),
             synthesized=True,

@@ -15,7 +15,12 @@ from __future__ import annotations
 from collections import OrderedDict
 from typing import Optional
 
-from models.schemas import EvidenceCategory, EvidenceItem, EvidenceStrength
+from models.schemas import (
+    EvidenceCategory,
+    EvidenceItem,
+    EvidenceStrength,
+    StudyDesignCount,
+)
 
 # class key -> (label, the rule that placed a record here)
 _CLASS_LABELS: "OrderedDict[str, tuple[str, str]]" = OrderedDict(
@@ -154,7 +159,14 @@ def _record_label(item: EvidenceItem) -> str:
 
 
 def compute_evidence_strength(evidence: list[EvidenceItem]) -> EvidenceStrength:
-    """Group retrieved records into evidence classes with their sources."""
+    """Group retrieved records into evidence classes with their sources.
+
+    Every class count is one unit — a retrieved evidence record — and the unit is
+    stated with the total, because the set mixes publications with label
+    passages. Reporting "37" next to a literature table that says "25
+    publications" without naming the difference is what makes a report look
+    self-contradictory.
+    """
     buckets: dict[str, list[EvidenceItem]] = {key: [] for key in _CLASS_LABELS}
     for item in evidence:
         buckets[_class_of(item)].append(item)
@@ -165,6 +177,7 @@ def compute_evidence_strength(evidence: list[EvidenceItem]) -> EvidenceStrength:
             label=_CLASS_LABELS[key][0],
             criteria=_CLASS_LABELS[key][1],
             count=len(records),
+            unit="label passage" if key == "regulatory" else "publication",
             records=[_record_label(r) for r in records],
         )
         for key, records in buckets.items()
@@ -173,15 +186,101 @@ def compute_evidence_strength(evidence: list[EvidenceItem]) -> EvidenceStrength:
     # Classes with no records are dropped; an empty bar is not a finding.
     populated = [c for c in categories if c.count]
     unclassified = len(buckets["unclassified"])
+    regulatory = len(buckets["regulatory"])
+    publications = len(evidence) - regulatory
 
     strength = EvidenceStrength(
         categories=populated,
         unclassified_count=unclassified,
         predominant_tier=_predominant(populated),
         limitations=_limitations(populated, unclassified),
+        total_records=len(evidence),
+        publication_records=publications,
+        regulatory_passages=regulatory,
+        mutually_exclusive=True,
+        denominator=(
+            f"{len(evidence)} retrieved evidence record(s) = "
+            f"{publications} publication(s) + {regulatory} regulatory label "
+            "passage(s). Each record is placed in exactly one class, so these "
+            "counts are mutually exclusive and sum to that total. A label passage "
+            "is not a publication."
+        ),
+        reconciles=sum(c.count for c in populated) == len(evidence),
+        study_design_counts=_study_design_counts(evidence, publications),
     )
     strength.interpretation = _interpretation(strength)
     return strength
+
+
+# Counts a narrative is allowed to quote. Each entry is (label, the substring a
+# source-reported publication type must contain, or None for any record in these
+# classes, the classes it may come from). A design count never spans more than
+# one unit: these are all publications, so label passages cannot inflate them.
+_DESIGN_FILTERS: tuple[tuple[str, Optional[str], frozenset[str]], ...] = (
+    (
+        "Randomized controlled trials",
+        "randomi",
+        frozenset({"rct"}),
+    ),
+    (
+        "Real-world and observational studies of patients",
+        None,
+        frozenset({"observational"}),
+    ),
+    (
+        "Systematic reviews and meta-analyses",
+        None,
+        frozenset({"systematic_review"}),
+    ),
+    (
+        "Case reports and case series",
+        None,
+        frozenset({"case_report"}),
+    ),
+)
+
+
+def _study_design_counts(
+    evidence: list[EvidenceItem], publications: int
+) -> list[StudyDesignCount]:
+    """Counts a narrative may quote, each with the records behind it.
+
+    Derived from the publication types the sources reported. A reader can open
+    the listed records and recount them, which is more than a summary sentence
+    offers, and the model is given these numbers so it never has to estimate one.
+    """
+    out: list[StudyDesignCount] = []
+    for label, needle, keys in _DESIGN_FILTERS:
+        matched = [
+            item
+            for item in evidence
+            if item.source_type == "literature"
+            and _class_of(item) in keys
+            and (
+                needle is None
+                or any(needle in (t or "").casefold() for t in item.publication_types)
+            )
+        ]
+        basis = (
+            f"source-reported publication type contains \"{needle}\""
+            if needle
+            else "the class the source-reported publication type maps to"
+        )
+        out.append(
+            StudyDesignCount(
+                label=label,
+                definition=(
+                    f"A retrieved publication placed in \"{label}\" by {basis}. "
+                    "Records the source gave no recognised publication type for "
+                    "are not counted here, so this is what this retrieval found, "
+                    "not what exists."
+                ),
+                count=len(matched),
+                records=[_record_label(r) for r in matched],
+                denominator=f"{publications} publication(s) retrieved",
+            )
+        )
+    return out
 
 
 def _predominant(categories: list[EvidenceCategory]) -> Optional[str]:

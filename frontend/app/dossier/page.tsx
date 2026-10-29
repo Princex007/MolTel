@@ -22,9 +22,11 @@ import EvidenceStrengthPanel from "@/components/EvidenceStrengthPanel";
 import ExportControls from "@/components/ExportControls";
 import ContradictoryFindingsPanel from "@/components/ContradictoryFindingsPanel";
 import ResearchGapPanel from "@/components/ResearchGapPanel";
+import ValidationPanel from "@/components/ValidationPanel";
 import DiseaseDashboard from "@/components/disease/DiseaseDashboard";
 import { ReferenceCitation } from "@/components/ReferenceList";
 import ClinicalTrialDashboard from "@/components/trials/ClinicalTrialDashboard";
+import TrialAttributionPanel from "@/components/trials/TrialAttributionPanel";
 
 // ─── Source status panel ──────────────────────────────────────────────────────
 
@@ -489,6 +491,9 @@ function DossierContent({ query, mode }: { query: string; mode: SearchMode }) {
             <BulletList text={d.clinical_development} />
           </div>
         )}
+        {data.query_attribution && (
+          <TrialAttributionPanel attribution={data.query_attribution} />
+        )}
         <ClinicalTrialDashboard
           trials={trialItems}
           analytics={analytics}
@@ -609,6 +614,22 @@ function DossierContent({ query, mode }: { query: string; mode: SearchMode }) {
       </DossierSection>
     ),
   });
+
+  if (data.validation) {
+    const nValidation = parts.length + 1;
+    parts.push({
+      id: "validation",
+      label: `${nValidation} Validation`,
+      node: (
+        <DossierSection
+          title={`${nValidation}. Pre-Publication Validation`}
+          description="Every narrative claim checked against the records this dossier was built from. A contradiction is named here rather than quietly rewritten."
+        >
+          <ValidationPanel report={data.validation} />
+        </DossierSection>
+      ),
+    });
+  }
 
   return (
     <div className="flex flex-col gap-5">

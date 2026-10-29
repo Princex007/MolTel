@@ -34,10 +34,16 @@ from models.schemas import (
 from services.candidate_analytics import compute_candidates
 from services.disease_analytics import compute_disease_analytics
 from services.dossier_generator import DossierGenerator
+from services.dossier_validator import (
+    collect_identifiers,
+    collect_label_products,
+    validate_dossier,
+)
 from services.evidence_normalizer import deduplicate, normalize_evidence_list
 from services.evidence_strength import compute_evidence_strength
 from services.literature_view import build_view
 from services.trial_analytics import compute_analytics
+from services.trial_attribution import attribute_trials
 
 logger = logging.getLogger(__name__)
 
@@ -175,6 +181,16 @@ class ResearchOrchestrator:
             )
         evidence_strength = compute_evidence_strength(ranked)
 
+        # A registry hit is not an attribution: only trials whose own intervention
+        # fields name the query count as studies of it. A disease or target search
+        # names no product, so the summary says the check is not applicable rather
+        # than reporting zero studies.
+        attribution = attribute_trials(
+            all_trials,
+            query,
+            applicable=mode is SearchMode.compound and trial_metadata.source_reached,
+        )
+
         # Disease view for a disease query only: a compound query resolves to one
         # product, so there is no subtype to separate.
         disease_analytics: Optional[DiseaseAnalytics] = None
@@ -202,6 +218,9 @@ class ResearchOrchestrator:
                 trials=all_trials,
                 targets=all_targets,
                 search_mode=mode,
+                analytics=trial_analytics,
+                strength=evidence_strength,
+                attribution=attribution,
             )
             dossier = result.dossier
             synthesized = result.synthesized
@@ -225,6 +244,25 @@ class ResearchOrchestrator:
         if dossier is not None:
             dossier = dossier.model_copy(update={"sources_status": source_statuses})
 
+        # Pre-publication gate. The narrative is written by the model, so it is
+        # checked here against the records that produced it. A claim that
+        # contradicts a retrieved record is named and blocks publication; nothing
+        # in this step rewrites the prose, because a silent repair would hide the
+        # disagreement the reader needs to see.
+        validation = validate_dossier(
+            dossier,
+            all_trials,
+            identifiers=collect_identifiers(ranked),
+            label_products=collect_label_products(fda_items),
+            evidence_strength=evidence_strength,
+            analytics=trial_analytics,
+            attribution=attribution,
+            sources=source_statuses,
+            partial_retrieval=trial_metadata.partial,
+        )
+        if validation.blocked:
+            overall_status = "partial"
+
         # Step 5: Return DossierResponse (include raw structured data for frontend tables)
         return DossierResponse(
             query=query,
@@ -240,6 +278,9 @@ class ResearchOrchestrator:
             evidence_strength=evidence_strength,
             trial_analytics=trial_analytics,
             candidate_analytics=candidate_analytics,
+            query_attribution=attribution,
+            validation=validation,
+            publication_blocked=validation.blocked,
             disease_analytics=disease_analytics,
             literature=literature_meta,
             retrieved_at=trial_metadata.retrieved_at,

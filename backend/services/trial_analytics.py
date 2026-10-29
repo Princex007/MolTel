@@ -15,6 +15,7 @@ from models.schemas import (
     ChartBucket,
     ClinicalTrial,
     StatusBucket,
+    StatusGroup,
     TrialAnalytics,
     TrialRetrievalMetadata,
     TrialStartPeriod,
@@ -63,15 +64,28 @@ def compute_analytics(
     phase_counts: Counter[str] = Counter()
     ongoing_phase_counts: Counter[str] = Counter()
     status_counts: Counter[tuple[str, str]] = Counter()
+    category_counts: Counter[str] = Counter()
 
     for trial in records:
-        category = trial_taxonomy.status_category(trial.overall_status or trial.status)
-        label = trial_taxonomy.status_label(trial.overall_status or trial.status) or "Unknown"
+        raw = trial.overall_status or trial.status
+        code = trial_taxonomy.normalize_status(raw)
+        category = trial_taxonomy.status_category(raw)
+        label = trial_taxonomy.status_label(raw) or "Unknown"
         status_counts[(label, category)] += 1
+        category_counts[category] += 1
         phase_counts[_phase_of(trial)] += 1
 
-        if category == "currently_recruiting":
+        # One counter per registry status, read off the code rather than the
+        # dashboard category: an "Enrolling by invitation" study is not silently
+        # reported as "Recruiting", and the category it belongs to is stated
+        # next to its count instead of being assumed from the heading.
+        if code == "RECRUITING":
             analytics.recruiting_trials += 1
+        elif code == "ENROLLING_BY_INVITATION":
+            analytics.enrolling_by_invitation_trials += 1
+
+        if category == "currently_recruiting":
+            analytics.currently_recruiting_trials += 1
         elif category == "ongoing_not_recruiting":
             # Reported separately so the reader can see that Ongoing is this
             # count plus the recruiting count, rather than a fourth bucket.
@@ -87,12 +101,34 @@ def compute_analytics(
         else:
             analytics.other_status_trials += 1
 
-        if trial_taxonomy.is_ongoing(trial.overall_status or trial.status):
+        if trial_taxonomy.is_ongoing(raw):
             analytics.ongoing_trials += 1
             ongoing_phase_counts[_phase_of(trial)] += 1
 
         if _phase_of(trial) == trial_taxonomy.UNKNOWN_PHASE:
             analytics.trials_with_unreported_phase += 1
+
+    # The derived groups carry their own membership so a heading can never drift
+    # from the arithmetic that produced the number next to it.
+    analytics.status_groups = [
+        StatusGroup(
+            category=category,
+            label=trial_taxonomy.STATUS_CATEGORY_LABELS[category],
+            definition=trial_taxonomy.status_group_definition(category),
+            registry_statuses=[
+                trial_taxonomy.STATUS_LABELS.get(code, code)
+                for code in trial_taxonomy.status_group_members(category)
+            ],
+            count=category_counts[category],
+        )
+        for category in trial_taxonomy.STATUS_CATEGORY_LABELS
+        if category_counts[category]
+    ]
+    analytics.ongoing_definition = trial_taxonomy.ongoing_definition()
+    # Every record lands in exactly one dashboard category, so these rows are a
+    # partition; a derived group such as Ongoing is a re-cut and stays out.
+    analytics.exclusive_status_total = sum(category_counts.values())
+    analytics.statuses_reconcile = analytics.exclusive_status_total == len(records)
 
     analytics.trials_by_phase = [
         ChartBucket(label=label, count=count)

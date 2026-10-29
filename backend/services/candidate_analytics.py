@@ -50,6 +50,27 @@ COMPARATOR_NAME = re.compile(
 def is_comparator(name: str) -> bool:
     return bool(COMPARATOR_NAME.match(normalize_name(name)))
 
+
+def _registry_comparator(roles: list[str]) -> Optional[bool]:
+    """What the registry's own arm roles say about this product, or None if silent.
+
+    Every role stated for it must be a comparator role: one product can be the
+    experimental arm of one study and the active comparator of another, and then
+    no single label fits. A placebo arm that carries the product's name in its
+    label is not a role the registry assigned to the product.
+    """
+    if not roles:
+        return None
+    return all(role.upper() in trial_taxonomy.COMPARATOR_ROLES for role in roles)
+
+
+def is_registered_comparator(record: CandidateRecord) -> bool:
+    """Prefer the registry's arm role; fall back to the name only when it is silent."""
+    stated = _registry_comparator(record.registry_roles)
+    if stated is None:
+        return is_comparator(record.name)
+    return stated
+
 # Shown wherever a label is reported, so a manufacturer is never read as the
 # owner of the application or the product's developer.
 LABEL_NOTE = (
@@ -109,14 +130,19 @@ class _Accumulator:
     def __init__(self) -> None:
         self.spellings: Counter[str] = Counter()
         self.types: Counter[str] = Counter()
+        self.roles: "OrderedDict[str, None]" = OrderedDict()
         self.trials: "OrderedDict[str, ClinicalTrial]" = OrderedDict()
         self.conditions: "OrderedDict[str, None]" = OrderedDict()
         self.sponsors: "OrderedDict[str, None]" = OrderedDict()
         self.collaborators: "OrderedDict[str, None]" = OrderedDict()
 
-    def add(self, trial: ClinicalTrial, name: str, intervention_type: str) -> None:
+    def add(
+        self, trial: ClinicalTrial, name: str, intervention_type: str, role: Optional[str]
+    ) -> None:
         self.spellings[name] += 1
         self.types[intervention_type] += 1
+        if role:
+            self.roles.setdefault(role.strip().upper())
         self.trials.setdefault(trial.nct_id, trial)
         for condition in trial.conditions:
             if condition and condition.strip():
@@ -151,7 +177,12 @@ def compute_candidates(
         candidate_trial_ids.add(trial.nct_id)
         for detail in drug_like:
             acc = accumulators.setdefault(normalize_name(detail.name), _Accumulator())
-            acc.add(trial, detail.name.strip(), (detail.type or "").strip().upper())
+            acc.add(
+                trial,
+                detail.name.strip(),
+                (detail.type or "").strip().upper(),
+                detail.role,
+            )
 
     records: list[CandidateRecord] = []
     by_phase: Counter[str] = Counter()
@@ -215,6 +246,7 @@ def compute_candidates(
             name=name,
             matched_names=sorted(acc.spellings),
             intervention_types=sorted(acc.types),
+            registry_roles=list(acc.roles),
             trials=len(trial_list),
             nct_ids=[t.nct_id for t in trial_list],
             phases=buckets,
@@ -278,7 +310,7 @@ def compute_candidates(
             )
         ],
         candidates_with_established_developer=sum(1 for r in records if r.developer),
-        comparator_candidates=sum(1 for r in records if is_comparator(r.name)),
+        comparator_candidates=sum(1 for r in records if is_registered_comparator(r)),
         candidates_with_openfda_label=sum(
             1 for r in records if r.label_manufacturer or r.fda_application_number
         ),

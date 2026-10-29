@@ -75,7 +75,12 @@ const DATASETS: Record<
         (t.conditions ?? []).join("; "),
         (t.interventions ?? []).join("; "),
         (t.intervention_details ?? [])
-          .map((i) => `${i.name} [${i.type ?? "type not reported"}]`)
+          .map(
+            (i) =>
+              `${i.name} [${i.type ?? "type not reported"}${
+                i.role ? `, arm role ${i.role}` : ", arm role not reported"
+              }]`
+          )
           .join("; ") || "none reported",
         text(t.sponsor),
         (t.collaborators ?? [])

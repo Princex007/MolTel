@@ -252,7 +252,7 @@ def test_status_cards_partition_the_record_set_exactly_once():
     )
 
     exclusive = (
-        a.recruiting_trials
+        a.currently_recruiting_trials
         + a.active_not_recruiting_trials
         + a.not_yet_recruiting_trials
         + a.completed_trials
@@ -261,7 +261,48 @@ def test_status_cards_partition_the_record_set_exactly_once():
         + a.other_status_trials
     )
     assert exclusive == a.total_trials == 10
-    assert a.ongoing_trials == a.recruiting_trials + a.active_not_recruiting_trials == 3
+    assert a.ongoing_trials == a.currently_recruiting_trials + a.active_not_recruiting_trials == 3
+
+
+def test_recruiting_card_is_strictly_the_recruiting_status():
+    """"Enrolling by invitation" is its own registry status, not a recruiting count.
+
+    The dashboard category that groups the two is reported separately, so a reader
+    who wants the registry's own word and one who wants the group both get a
+    number that says which it is.
+    """
+    a = compute_analytics(
+        [
+            _trial("NCT1", "RECRUITING", ["PHASE2"]),
+            _trial("NCT2", "ENROLLING_BY_INVITATION", ["PHASE2"]),
+        ],
+        _metadata(),
+    )
+
+    assert a.recruiting_trials == 1
+    assert a.enrolling_by_invitation_trials == 1
+    assert a.currently_recruiting_trials == 2
+    # Ongoing is a re-cut of the same records, never a fourth bucket to add.
+    assert a.ongoing_trials == 2
+    assert a.statuses_reconcile is True
+
+
+def test_status_groups_carry_the_membership_that_produced_their_count():
+    """A heading and its arithmetic travel together, so they cannot drift apart."""
+    a = compute_analytics(
+        [
+            _trial("NCT1", "RECRUITING", ["PHASE2"]),
+            _trial("NCT2", "ENROLLING_BY_INVITATION", ["PHASE2"]),
+            _trial("NCT3", "COMPLETED", ["PHASE3"]),
+        ],
+        _metadata(),
+    )
+
+    recruiting = next(g for g in a.status_groups if g.category == "currently_recruiting")
+    assert recruiting.count == 2
+    assert recruiting.registry_statuses == ["Recruiting", "Enrolling by invitation"]
+    assert "Recruiting" in recruiting.definition and "Enrolling by invitation" in recruiting.definition
+    assert sum(g.count for g in a.status_groups if g.category != "ongoing") == a.total_trials
 
 
 def test_ongoing_chart_only_contains_ongoing_studies():

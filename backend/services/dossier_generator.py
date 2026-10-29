@@ -18,9 +18,12 @@ from models.schemas import (
     ContradictoryFindings,
     Dossier,
     EvidenceItem,
+    EvidenceStrength,
+    QueryAttributionSummary,
     ResearchGap,
     SearchMode,
     TargetProfile,
+    TrialAnalytics,
 )
 from utils.text import condense, truncate
 
@@ -490,6 +493,9 @@ class DossierGenerator:
         trials: list[ClinicalTrial],
         targets: list[TargetProfile],
         search_mode: SearchMode = SearchMode.compound,
+        analytics: Optional[TrialAnalytics] = None,
+        strength: Optional[EvidenceStrength] = None,
+        attribution: Optional[QueryAttributionSummary] = None,
     ) -> DossierResult:
         """Generate a Dossier, falling back to raw source data if the LLM is unusable."""
 
@@ -510,7 +516,7 @@ class DossierGenerator:
             )
 
         evidence_payload = self._build_evidence_payload(
-            evidence, compound, trials, targets
+            evidence, compound, trials, targets, analytics, strength, attribution
         )
         user_message = self._system_prompt.replace("{evidence_payload}", evidence_payload).replace(
             "{query}", query
@@ -556,6 +562,9 @@ class DossierGenerator:
         compound: Optional[CompoundProfile],
         trials: list[ClinicalTrial],
         targets: list[TargetProfile],
+        analytics: Optional[TrialAnalytics] = None,
+        strength: Optional[EvidenceStrength] = None,
+        attribution: Optional[QueryAttributionSummary] = None,
     ) -> str:
         """Serialize top evidence items + structured data into a JSON string."""
         top_evidence = evidence[:_MAX_EVIDENCE_ITEMS]
@@ -584,8 +593,34 @@ class DossierGenerator:
                     "title": t.title,
                     "status": t.status,
                     "phase": t.phase,
+                    "registry_status": t.overall_status,
+                    "registry_phases": t.phases,
                     "conditions": t.conditions,
                     "interventions": t.interventions,
+                    # The arm role is what the registry itself states about an
+                    # intervention, so the narrative can say who receives it.
+                    "interventions_with_registry_roles": [
+                        {
+                            "name": d.name,
+                            "registry_type": d.type,
+                            "registry_arm_role": d.role,
+                            "arms": d.arm_group_labels,
+                        }
+                        for d in t.intervention_details
+                    ],
+                    "start_date": t.start_date,
+                    "completion_date": t.completion_date,
+                    "primary_completion_date": t.primary_completion_date,
+                    "enrollment": t.enrollment_count,
+                    "last_update_date": t.last_update_date,
+                    # An outcome measure names the drug each assessment is about
+                    # and the arm it belongs to, which an intervention list alone
+                    # cannot show: a study can register two products in different
+                    # cohorts without ever assessing one against the other.
+                    "registry_outcome_measures": [
+                        f"[{o.category}] {o.measure}" for o in t.outcomes[:12]
+                    ],
+                    "registry_outcome_time_points": t.outcome_time_frames,
                     "url": t.url,
                 }
                 for t in trials
@@ -602,8 +637,77 @@ class DossierGenerator:
                 }
                 for tgt in targets
             ],
+            # Computed from the records above. These are the only figures the
+            # narrative may state: the model is not asked to count, add or
+            # average anything, and a number absent here has no support.
+            "derived_counts_only": self._derived_counts(analytics, strength, attribution),
         }
+        if attribution is not None and attribution.applicable:
+            # Which retrieved trials the registry itself links to the query, so a
+            # "studies of this product" sentence cannot be built from a keyword hit.
+            payload["trial_attribution"] = {
+                "rule": attribution.rule,
+                "query_specific_trial_ids": sorted(
+                    r.nct_id
+                    for r in attribution.records
+                    if r.category in ("direct", "comparator_or_combination")
+                ),
+                "categories": [
+                    {"label": c.label, "count": c.count} for c in attribution.categories
+                ],
+                "reconciliation": attribution.reconciliation_note,
+                "excluded_trial_ids_are_not_studies_of_the_product": True,
+            }
         return json.dumps(payload, ensure_ascii=False, indent=2)
+
+    @staticmethod
+    def _derived_counts(
+        analytics: Optional[TrialAnalytics],
+        strength: Optional[EvidenceStrength],
+        attribution: Optional[QueryAttributionSummary],
+    ) -> dict:
+        """Every number this dossier is allowed to state, and where it comes from."""
+        counts: dict = {
+            "note": (
+                "These values are computed from the retrieved records. State no other "
+                "count, total or percentage of records: a figure not listed here is not "
+                "supported by this retrieval."
+            ),
+        }
+        if analytics:
+            counts["trials"] = {
+                "distinct_trials": analytics.total_trials,
+                "ongoing": analytics.ongoing_trials,
+                "ongoing_definition": analytics.ongoing_definition,
+                "registry_status_counts": {
+                    group.label: group.count for group in analytics.status_groups
+                },
+                "status_group_definitions": {
+                    group.label: group.definition for group in analytics.status_groups
+                },
+                "phase_counts": {b.label: b.count for b in analytics.trials_by_phase},
+                "trials_with_unreported_phase": analytics.trials_with_unreported_phase,
+            }
+        if strength:
+            counts["evidence"] = {
+                "total_evidence_records": strength.total_records,
+                "publications": strength.publication_records,
+                "regulatory_label_passages": strength.regulatory_passages,
+                "by_evidence_class": {c.label: c.count for c in strength.categories},
+                "by_study_design": {d.label: d.count for d in strength.study_design_counts},
+                "denominator": strength.denominator,
+            }
+        if attribution is not None and attribution.applicable:
+            counts["trials_of_the_queried_product"] = {
+                "direct": attribution.direct_trials,
+                "as_comparator_or_combination": (
+                    attribution.comparator_or_combination_trials
+                ),
+                "query_specific_total": attribution.query_specific_trials,
+                "related_but_not_named": attribution.related_not_named_trials,
+                "not_demonstrably_relevant": attribution.not_demonstrably_relevant_trials,
+            }
+        return counts
 
     async def _call_openrouter(self, user_message: str) -> str:
         """POST to OpenRouter and return the assistant message content."""

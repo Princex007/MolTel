@@ -104,20 +104,21 @@ export default function ClinicalTrialDashboard({
 
   const charts = useMemo(() => (analytics ? buildTrialCharts(analytics) : []), [analytics]);
 
-  // MolTel's derived grouping of the registry's own status labels. Each record
-  // lands in exactly one category, so the column reconciles with the total.
-  const grouping = useMemo(() => {
-    const byCategory = new Map<string, { label: string; count: number; statuses: Set<string> }>();
-    for (const t of trials) {
-      const key = t.status_category ?? "other_or_unclear";
-      const label = t.status_category_label ?? "Other or unclear";
-      const entry = byCategory.get(key) ?? { label, count: 0, statuses: new Set<string>() };
-      entry.count += 1;
-      if (t.overall_status) entry.statuses.add(t.overall_status);
-      byCategory.set(key, entry);
-    }
-    return Array.from(byCategory.values()).sort((a, b) => b.count - a.count);
-  }, [trials]);
+  // MolTel's derived grouping, taken from the backend so each heading arrives
+  // with the registry statuses inside it and the definition that produced its
+  // count. Recomputing it here would let a label drift from the arithmetic.
+  const grouping = useMemo(
+    () =>
+      (analytics?.status_groups ?? [])
+        .map((g) => ({
+          label: g.label,
+          count: g.count,
+          statuses: g.registry_statuses,
+          definition: g.definition,
+        }))
+        .sort((a, b) => b.count - a.count),
+    [analytics]
+  );
 
   // The registry could not be consulted. Zero-filled charts here would read as
   // "no trials exist", which is a different claim from "we could not ask".
@@ -198,7 +199,7 @@ export default function ClinicalTrialDashboard({
         <MetricCard
           label="Ongoing"
           value={analytics.ongoing_trials}
-          hint={`Recruiting (${analytics.recruiting_trials}) + Active, not recruiting (${analytics.active_not_recruiting_trials}). A re-cut of the same records — never added to the status totals.`}
+          hint={`${analytics.ongoing_definition} Currently recruiting: ${analytics.currently_recruiting_trials} (Recruiting ${analytics.recruiting_trials}, Enrolling by invitation ${analytics.enrolling_by_invitation_trials}); Active, not recruiting: ${analytics.active_not_recruiting_trials}. A re-cut of the same records — never added to the status totals.`}
         />
         <MetricCard
           label="Phase not reported"
@@ -233,7 +234,7 @@ export default function ClinicalTrialDashboard({
                       <tr key={g.label}>
                         <td className="py-1 pr-2 text-slate-700">{g.label}</td>
                         <td className="py-1 pr-2 text-slate-500">
-                          {Array.from(g.statuses).join(", ") || "—"}
+                          {g.statuses.join(", ") || "—"}
                         </td>
                         <td className="py-1 text-right font-mono text-slate-800">
                           {g.count}

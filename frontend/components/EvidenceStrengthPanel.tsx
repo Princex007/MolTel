@@ -26,6 +26,21 @@ export default function EvidenceStrengthPanel({
     <div className="space-y-5">
       <div className="rounded-md border border-slate-200 bg-slate-50 px-4 py-3">
         <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+          Denominator for every count below
+        </p>
+        <p className="mt-1 text-sm leading-relaxed text-slate-700">
+          {strength.denominator}
+        </p>
+        {!strength.reconciles && (
+          <p className="mt-1 text-xs font-medium text-red-700">
+            These class counts do not sum to the stated total. Treat the table as
+            unverified until the split is resolved.
+          </p>
+        )}
+      </div>
+
+      <div className="rounded-md border border-slate-200 bg-slate-50 px-4 py-3">
+        <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
           Automated, preliminary interpretation
         </p>
         <p className="mt-1 text-sm leading-relaxed text-slate-700">
@@ -76,7 +91,7 @@ export default function EvidenceStrengthPanel({
                     {category.label}
                   </span>
                   <span className="block text-[11px] text-slate-500">
-                    {category.criteria}
+                    Counted in {category.unit}s — {category.criteria}
                   </span>
                 </span>
                 <span className="shrink-0 text-xs text-slate-400">
@@ -105,6 +120,35 @@ export default function EvidenceStrengthPanel({
           );
         })}
       </ul>
+
+      {strength.study_design_counts.length > 0 && (
+        <div>
+          <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
+            Study designs, each with the denominator it is counted against
+          </p>
+          <ul className="divide-y divide-slate-100 rounded-lg border border-slate-200">
+            {strength.study_design_counts.map((design) => (
+              <li key={design.label} className="px-4 py-2.5">
+                <p className="text-sm font-medium text-slate-800">
+                  <span className="mr-2 inline-block w-6 text-right font-semibold text-teal-700">
+                    {design.count}
+                  </span>
+                  {design.label}
+                </p>
+                <p className="mt-0.5 text-[11px] leading-relaxed text-slate-500">
+                  {design.definition} Denominator: {design.denominator}
+                </p>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-1.5 text-[11px] text-slate-500">
+            A design tally is a different cut of the same records, not an addition
+            to the classes above. “Real-world” here means the source described the
+            study as real-world, observational or registry-based; it is not a
+            verdict on the design.
+          </p>
+        </div>
+      )}
 
       <div>
         <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-500">

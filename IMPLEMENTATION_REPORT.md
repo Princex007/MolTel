@@ -243,3 +243,102 @@ test_normalizer,test_ranker,test_orchestrator,test_trials}.py`,
 EvidenceBadge,EvidenceStrengthPanel,RegulatoryTable,TargetTable}.tsx`,
 `frontend/components/charts/BarBreakdown.tsx`, `frontend/lib/api.ts`,
 `frontend/package.json` (adds `jspdf` and `docx`), `drug-intelligence/README.md`.
+
+---
+
+# Dossier Fix Report — 2026-10-29
+
+Against `Qoder_MolTel_Dossier_Fix_Instructions.md`, using the semaglutide dossier
+generated that day as the regression case. Nothing below is a semaglutide
+correction: each rule reads the records a request retrieved, whatever the query.
+
+## What changed, by brief section
+
+**§1 phase and status.** The registry's own `phase` and `overall_status` now
+travel on every trial, are handed to the model per trial, and are re-checked
+against the narrative afterwards. A sentence that lists studies states one phase
+per identifier, so the claim tested is the wording in that study's own clause,
+nearest to its NCT ID — not the sentence's opener.
+
+**§2 attribution and candidate counting.** New `services/trial_attribution.py`
+sorts every retrieved trial into four mutually exclusive categories from
+`armsInterventionsModule` alone: registered intervention, registered as comparator
+or inside a combination name, related through a co-registered product or wording,
+and not demonstrably relevant. A title mention, a procedure, or a placebo arm
+labelled with the product's name never enters a "studies of this product" count,
+and no drug-class table or synonym list is consulted. Each NCT ID is counted once
+in every aggregate.
+
+**§3 publication arithmetic.** Evidence categories are mutually exclusive and each
+row states its denominator and the records behind it, so a narrative can be
+recounted rather than trusted. Records whose source gave no recognised publication
+type are reported (`DESIGN_UNSPECIFIED`) instead of folded into a tier, and a count
+the retrieval cannot produce is an error.
+
+**§4 efficacy figures.** A percentage must name a retrieved record in the same
+sentence. Durations are checked against the outcome time points the registry
+states for that study, so a 68-week reading cannot be rendered as six months, and
+a reading cannot be placed outside the record's own start-to-completion span.
+
+**§5–§7 safety, mechanism and gap language.** A pharmacovigilance sentence needs a
+non-causal qualifier to stay; a rodent or in-vitro finding must state its human
+relevance; a labelling claim must name the product and application it comes from;
+an absence is bounded to what this retrieval queried, and a capped set cannot be
+called comprehensive. Surrogate endpoints are separated from clinical benefit, and
+a denial ("a hard clinical outcome was not assessed") is not treated as an
+overclaim.
+
+**§8 retrieval transparency.** Per-source status distinguishes error from
+no-results from skipped; trial metadata carries `records_returned`,
+`total_available`, `has_more` and `partial`; every panel, export and the dossier
+banner show the same figures.
+
+**§9 the gate.** `services/dossier_validator.py` runs 18 rules over the finished
+narrative, the structured gap and contradiction sections and the aggregates. It
+flags and blocks; it never repairs, because editing the prose would put the
+pipeline's guess above the source. An error sets `blocked`, the response `status`
+becomes `partial` and `publication_blocked` is true.
+
+**§10 tests.** `backend/tests/test_dossier_regressions.py` — 36 tests plus one
+opt-in live schema check — replays every defect class against three study records
+captured from ClinicalTrials.gov v2 on 2026-10-29 (`backend/tests/fixtures/`), so
+no test reaches the network or spends AI credits.
+
+## Defects the tests found in the fix itself
+
+- `_parse_outcomes` read `outcomeMeasure`; the v2 key is `measure`, so every
+  outcome list parsed empty and the duration rule had nothing to check.
+- The phase rule judged every identifier in a sentence by the first phase in it,
+  inventing mismatches for a correctly written list.
+- "Recruiting or active trials include…" claimed one state, contradicting records
+  the registry files as *Active, not recruiting*.
+- `attribute_trials` counted a study returned by two queries twice while reporting
+  `distinct_trials` once, so the category totals did not reconcile.
+
+## Checks run
+
+```
+cd drug-intelligence/backend && python -m pytest -q
+→ 223 passed, 1 skipped in 50.28s
+
+cd drug-intelligence/backend && MOLTEL_LIVE_TESTS=1 python -m pytest -k live_registry
+→ 1 passed in 5.09s
+
+cd drug-intelligence/frontend && npx tsc --noEmit
+→ exit 0
+
+cd drug-intelligence/frontend && npx next build
+✓ Compiled successfully   ✓ Generating static pages (6/6)
+/dossier   147 kB    first-load JS 235 kB
+→ exit 0
+```
+
+A scratch backend on port 8077 generated one live semaglutide dossier
+(`ai_synthesized: true`, 50 registry records). The gate reported 27 findings and
+blocked publication; re-validating that same stored narrative after the pairing
+fixes gives 4 errors and 18 warnings, and all four errors are genuine — two
+completed studies the prose listed as recruiting or active, one record with an
+unknown registry status described as terminated, and a labelling sentence that
+names no product. No `FABRICATED_IDENTIFIER`, `COUNT_NOT_IN_RETRIEVAL` or
+`NUMERIC_CLAIM_UNSOURCEDED` fired: with the registry figures and the arm lists in
+its payload, the model cited real records and used the numbers it was given.

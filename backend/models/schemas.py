@@ -108,6 +108,33 @@ class CompoundProfile(BaseModel):
     inchi_key: Optional[str] = None
 
 
+class TrialOutcome(BaseModel):
+    """An outcome the registry lists for a study.
+
+    A measure names the drug or endpoint that assessment is about, which an
+    intervention list alone cannot show: a study can register two products and
+    still measure only one of them against a third.
+    """
+
+    measure: str
+    # "primary" or "secondary", as the registry files it.
+    category: str = "primary"
+
+
+class TrialArmGroup(BaseModel):
+    """One study arm exactly as the registry describes it.
+
+    The arm type is the only place the registry states an intervention's *role*,
+    so candidate and attribution counts use it instead of guessing from wording.
+    """
+
+    label: str
+    # Registry code: EXPERIMENTAL | ACTIVE_COMPARATOR | PLACEBO_COMPARATOR |
+    # SHAM_COMPARATOR | OTHER.
+    type: Optional[str] = None
+    intervention_names: list[str] = Field(default_factory=list)
+
+
 class TrialIntervention(BaseModel):
     """One intervention exactly as the registry lists it.
 
@@ -118,6 +145,12 @@ class TrialIntervention(BaseModel):
 
     name: str
     type: Optional[str] = None
+    description: Optional[str] = None
+    # Arm labels the registry links this intervention to, and the role the
+    # registry gives it through those arms. Both stay None/empty when the
+    # record does not state them — a role is never inferred from the name.
+    arm_group_labels: list[str] = Field(default_factory=list)
+    role: Optional[str] = None
 
 
 class TrialCollaborator(BaseModel):
@@ -148,7 +181,11 @@ class ClinicalTrial(BaseModel):
 
     # Per-intervention detail, needed to tell a studied product from a study.
     intervention_details: list[TrialIntervention] = Field(default_factory=list)
+    arm_groups: list[TrialArmGroup] = Field(default_factory=list)
     collaborators: list[TrialCollaborator] = Field(default_factory=list)
+    outcomes: list[TrialOutcome] = Field(default_factory=list)
+    # Every distinct time frame the registry states for these outcomes.
+    outcome_time_frames: list[str] = Field(default_factory=list)
 
     # Raw registry values, preserved for provenance.
     overall_status: Optional[str] = None
@@ -217,6 +254,20 @@ class StatusBucket(ChartBucket):
     category: str
 
 
+class StatusGroup(BaseModel):
+    """One derived dashboard category, the registry statuses inside it, and its count.
+
+    The membership travels with the number so a heading cannot drift away from the
+    arithmetic that produced it.
+    """
+
+    category: str
+    label: str
+    definition: str
+    registry_statuses: list[str] = Field(default_factory=list)
+    count: int = 0
+
+
 class TrialStartPeriod(BaseModel):
     period: str
     count: int
@@ -227,7 +278,11 @@ class TrialAnalytics(BaseModel):
 
     total_trials: int = 0
     ongoing_trials: int = 0
+    # Strictly the registry status RECRUITING. The category that also folds in
+    # "Enrolling by invitation" is reported separately as currently_recruiting.
     recruiting_trials: int = 0
+    enrolling_by_invitation_trials: int = 0
+    currently_recruiting_trials: int = 0
     active_not_recruiting_trials: int = 0
     not_yet_recruiting_trials: int = 0
     completed_trials: int = 0
@@ -238,6 +293,12 @@ class TrialAnalytics(BaseModel):
     trials_by_phase: list[ChartBucket] = Field(default_factory=list)
     ongoing_trials_by_phase: list[ChartBucket] = Field(default_factory=list)
     trials_by_status: list[StatusBucket] = Field(default_factory=list)
+    # Derived groups with their membership stated, plus the reconciliation the
+    # pre-publication gate checks.
+    status_groups: list[StatusGroup] = Field(default_factory=list)
+    ongoing_definition: str = ""
+    exclusive_status_total: int = 0
+    statuses_reconcile: bool = True
     trial_starts_by_period: list[TrialStartPeriod] = Field(default_factory=list)
     timeline_granularity: Optional[str] = None
     timeline_omitted_reason: Optional[str] = None
@@ -268,6 +329,10 @@ class CandidateRecord(BaseModel):
     name: str
     matched_names: list[str] = Field(default_factory=list)
     intervention_types: list[str] = Field(default_factory=list)
+    # The arm roles the registry states wherever this product is registered. A
+    # placebo arm labelled with the product's own name does not make the product
+    # a comparator, so the role is read from the arm, never from the wording.
+    registry_roles: list[str] = Field(default_factory=list)
     trials: int = 0
     nct_ids: list[str] = Field(default_factory=list)
     phases: list[CandidatePhaseBucket] = Field(default_factory=list)
@@ -335,6 +400,59 @@ class CandidateAnalytics(BaseModel):
         "comparator count gives how many of these there are."
     )
     metadata: TrialRetrievalMetadata
+
+
+class AttributionCategory(BaseModel):
+    """One attribution category, its definition and how many trials landed in it."""
+
+    key: str
+    label: str
+    count: int = 0
+    # What puts a trial in this row, carried with the number so a heading and its
+    # evidence cannot be read apart.
+    basis: str = ""
+
+
+class QueryAttribution(BaseModel):
+    """One trial and the structured registry evidence for its relationship to the query."""
+
+    nct_id: str
+    title: Optional[str] = None
+    category: str
+    category_label: str
+    basis: str = ""
+    matched_interventions: list[str] = Field(default_factory=list)
+    registry_roles: list[str] = Field(default_factory=list)
+    source_url: Optional[str] = None
+
+
+class QueryAttributionSummary(BaseModel):
+    """Trials sorted by what the registry actually states about the queried product.
+
+    Kept separate from `CandidateAnalytics` on purpose: how many studies exist of
+    a product and how many products were studied are two different questions, and
+    a count that mixes placebos, procedures and somebody else's investigational
+    drug cannot be read as that product's development pipeline.
+    """
+
+    query: str
+    applicable: bool = True
+    reason: str = ""
+    distinct_trials: int = 0
+    direct_trials: int = 0
+    comparator_or_combination_trials: int = 0
+    query_specific_trials: int = 0
+    related_not_named_trials: int = 0
+    not_demonstrably_relevant_trials: int = 0
+    categories: list[AttributionCategory] = Field(default_factory=list)
+    records: list[QueryAttribution] = Field(default_factory=list)
+    excluded_nct_ids: list[str] = Field(default_factory=list)
+    distinct_intervention_names: int = 0
+    placebo_or_sham_arms: int = 0
+    distinct_investigational_candidates: int = 0
+    placebo_or_sham_names: list[str] = Field(default_factory=list)
+    rule: str = ""
+    reconciliation_note: str = ""
 
 
 class TrialsResponse(BaseModel):
@@ -598,9 +716,26 @@ class EvidenceCategory(BaseModel):
     key: str
     label: str
     count: int = 0
+    # What one unit of this count is. Stated because the classes mix publications
+    # with label passages, and a total without a unit reads as a publication count.
+    unit: str = "evidence record"
     # The rule this class used, shown in the UI so the grouping is auditable.
     criteria: str = ""
     records: list[str] = Field(default_factory=list)
+
+
+class StudyDesignCount(BaseModel):
+    """A study-design tally with the records that produced it.
+
+    These are the only record counts the narrative is allowed to quote, so each
+    one carries its own definition and denominator and can be recounted by hand.
+    """
+
+    label: str
+    definition: str
+    count: int = 0
+    records: list[str] = Field(default_factory=list)
+    denominator: str = ""
 
 
 class EvidenceStrength(BaseModel):
@@ -616,6 +751,16 @@ class EvidenceStrength(BaseModel):
     limitations: list[str] = Field(default_factory=list)
     unclassified_count: int = 0
     automated: bool = True
+    # The denominator every class count is taken against, stated rather than
+    # assumed, plus the split that explains why it differs from the publication
+    # count a reader sees in the literature table.
+    total_records: int = 0
+    publication_records: int = 0
+    regulatory_passages: int = 0
+    mutually_exclusive: bool = True
+    denominator: str = ""
+    reconciles: bool = True
+    study_design_counts: list[StudyDesignCount] = Field(default_factory=list)
 
 
 class Contradiction(BaseModel):
@@ -680,6 +825,46 @@ class SourceStatus(BaseModel):
     note: Optional[str] = None
 
 
+class ValidationFinding(BaseModel):
+    """One pre-publication check result, stated so a reader can act on it.
+
+    Nothing here edits the report. A claim that cannot be supported is named and
+    labelled for review, because silently repairing source-derived prose would
+    hide the disagreement the reader needs to see.
+    """
+
+    rule: str
+    # 'error' blocks publication; 'warning' is published with the finding shown.
+    severity: str
+    field: str
+    quote: str = ""
+    expected: Optional[str] = None
+    observed: Optional[str] = None
+    source_ref: Optional[str] = None
+    suggested_correction: Optional[str] = None
+    status: str = "fail"
+    blocks_publication: bool = False
+
+
+class ValidationReport(BaseModel):
+    """Machine-readable QA output published alongside every dossier."""
+
+    errors: int = 0
+    warnings: int = 0
+    blocked: bool = False
+    findings: list[ValidationFinding] = Field(default_factory=list)
+    rules_run: list[str] = Field(default_factory=list)
+    checked_fields: list[str] = Field(default_factory=list)
+    generated_at: Optional[str] = None
+    note: str = (
+        "Errors contradict a retrieved record; warnings mark weaker evidence or "
+        "incomplete retrieval. The gate never changes a claim — it names the "
+        "disagreement and the source that would settle it."
+    )
+    override: bool = False
+    override_reason: Optional[str] = None
+
+
 class DossierResponse(BaseModel):
     query: str
     status: str  # 'success', 'partial', 'error'
@@ -697,6 +882,13 @@ class DossierResponse(BaseModel):
     evidence_strength: Optional[EvidenceStrength] = None
     trial_analytics: Optional[TrialAnalytics] = None
     candidate_analytics: Optional[CandidateAnalytics] = None
+    # Which retrieved trials actually name the queried product, per §2 of the
+    # research-safety rules: a registry hit is not an attribution.
+    query_attribution: Optional[QueryAttributionSummary] = None
+    # Pre-publication gate. Rendered in the report so a blocked claim is visible
+    # to the reader rather than fixed behind their back.
+    validation: Optional[ValidationReport] = None
+    publication_blocked: bool = False
     # Only computed for a disease search; a compound query has no subtype to resolve.
     disease_analytics: Optional[DiseaseAnalytics] = None
     # The literature ordering this response was built with: its rule, the counts

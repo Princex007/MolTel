@@ -14,9 +14,11 @@ import type {
   DiseaseAnalytics,
   DossierResponse,
   EvidenceItem,
+  QueryAttributionSummary,
   SearchMode,
   TargetProfile,
   TrialAnalytics,
+  ValidationReport,
 } from "./api";
 import { buildCandidateCharts } from "./candidateCharts";
 import { buildTrialCharts, type ChartSpec } from "./trialCharts";
@@ -225,6 +227,11 @@ export function trialRows(trials: ClinicalTrial[]): string[][] {
     orMissing(t.title),
     orMissing(t.phase ?? (t.phases?.length ? t.phases.join(" + ") : t.phase_category)),
     orMissing(t.status ?? t.overall_status),
+    // The role is the registry's own, read from the arm the intervention sits in,
+    // so a reader can see whether the product is administered or is the comparator.
+    (t.intervention_details ?? [])
+      .map((i) => `${i.name} (${i.role ?? "arm role not reported"})`)
+      .join("; ") || "no intervention registered",
     fmtDate(t.start_date),
     fmtDate(t.completion_date ?? t.primary_completion_date),
     orMissing(t.sponsor),
@@ -370,6 +377,7 @@ export function buildReportModel(data: DossierResponse, query: string): ReportMo
   const signals = detectSignals(data);
   const analytics: TrialAnalytics | null = data.trial_analytics ?? null;
   const candidates: CandidateAnalytics | null = data.candidate_analytics ?? null;
+  const attribution: QueryAttributionSummary | null = data.query_attribution ?? null;
   const charts = analytics ? buildTrialCharts(analytics) : [];
   const candidateCharts = candidates ? buildCandidateCharts(candidates) : [];
   const sections: ReportSection[] = [];
@@ -570,19 +578,42 @@ export function buildReportModel(data: DossierResponse, query: string): ReportMo
       kind: "table",
       table: {
         id: "evidence-classes",
-        columns: ["Evidence class", "Records", "Classification basis"],
+        columns: ["Evidence class", "Count", "Unit", "Classification basis"],
         rows: es.categories.map((c) => [
           c.label,
           String(c.count),
-          "Assigned by the retrieval pipeline from source record metadata (publication type and study descriptors), not judged by the model.",
+          c.unit,
+          c.criteria || "Assigned by the retrieval pipeline from source record metadata (publication type and study descriptors), not judged by the model.",
         ]),
         note:
+          `${es.denominator} ` +
           (es.unclassified_count > 0
             ? `${es.unclassified_count} record(s) could not be classified from their source metadata and are reported as unclassified rather than forced into a class. `
             : "") +
-          "Publication type is not a quality score: no numeric evidence score is computed and none is implied.",
+          (es.reconciles
+            ? "Every record falls in exactly one class, so these counts sum to the total above."
+            : "Warning: these class counts do not sum to the stated total.") +
+          " Publication type is not a quality score: no numeric evidence score is computed and none is implied.",
       },
     });
+    if (es.study_design_counts.length) {
+      // Design tallies are asked against a named denominator because "real-world
+      // studies" over a mixed record set reads very differently over publications.
+      litNodes.push({
+        kind: "table",
+        table: {
+          id: "study-designs",
+          columns: ["Study design", "Count", "Denominator", "Definition"],
+          rows: es.study_design_counts.map((s) => [
+            s.label,
+            String(s.count),
+            s.denominator,
+            s.definition,
+          ]),
+          note: "Counts are taken from what each source reported as its publication type. A design tally overlaps the evidence classes above: it is a different cut of the same records, not an addition to them.",
+        },
+      });
+    }
     if (es.interpretation?.trim()) {
       litNodes.push({ kind: "prose", text: es.interpretation.trim() });
     }
@@ -624,25 +655,27 @@ export function buildReportModel(data: DossierResponse, query: string): ReportMo
   // 6. Clinical Development — the only place trial counts appear.
   const clNodes: ReportNode[] = [];
   if (analytics) {
+    // Each row is the backend's own heading and definition, so a label cannot
+    // claim a membership the arithmetic did not use.
     clNodes.push({
       kind: "kv",
       entries: [
         ["Distinct trials retrieved", String(analytics.total_trials)],
-        ["Recruiting", String(analytics.recruiting_trials)],
-        ["Active, not recruiting", String(analytics.active_not_recruiting_trials)],
-        ["Not yet recruiting", String(analytics.not_yet_recruiting_trials)],
-        ["Completed", String(analytics.completed_trials)],
-        ["Discontinued (terminated or withdrawn)", String(analytics.discontinued_trials)],
-        ["Suspended", String(analytics.paused_trials)],
-        ["Other or unclear status", String(analytics.other_status_trials)],
-        ["Ongoing (Recruiting + Active, not recruiting)", String(analytics.ongoing_trials)],
+        ...analytics.status_groups.map((g) => [g.label, String(g.count)] as [string, string]),
+        ["Ongoing — re-cut, not a row above", String(analytics.ongoing_trials)],
         ["Phase not reported", String(analytics.trials_with_unreported_phase)],
       ],
     });
     clNodes.push({
       kind: "prose",
       text:
-        "These status rows are one record per trial and sum to the distinct total; Ongoing and phase-not-reported are re-cuts of the same records and are never added to them. A completed trial is not necessarily a successful one, and recruiting does not establish efficacy.",
+        `${analytics.status_groups
+          .map((g) => g.definition)
+          .join(" ")} ${analytics.ongoing_definition} ` +
+        (analytics.statuses_reconcile
+          ? `The status rows are one record per trial and sum to the ${analytics.total_trials} distinct trials retrieved.`
+          : `Warning: the status rows sum to ${analytics.exclusive_status_total}, which does not equal the ${analytics.total_trials} distinct trials retrieved.`) +
+        " A completed trial is not necessarily a successful one, and recruiting does not establish efficacy.",
     });
     if (d?.clinical_development?.trim()) {
       clNodes.push(...proseOrBullets(d.clinical_development));
@@ -658,6 +691,7 @@ export function buildReportModel(data: DossierResponse, query: string): ReportMo
           "Title",
           "Phase",
           "Registry status",
+          "Registered interventions (arm role)",
           "Start",
           "Completion",
           "Sponsor",
@@ -670,11 +704,32 @@ export function buildReportModel(data: DossierResponse, query: string): ReportMo
           `Registry values as reported by ClinicalTrials.gov on ${fmtDateTime(
             analytics.metadata.retrieved_at
           )}. Phase and status are separate dimensions; combined phases stay one category. ` +
+          "An intervention's arm role is the registry's own, taken from the arm it is " +
+          "listed in; where the registry links no arm, the role is reported as not stated " +
+          "rather than inferred from the product name. " +
           (omitted > 0
             ? `The first ${PDF_ROW_CAP} of ${rows.length + omitted} trials are listed here; all are in the CSV export.`
             : "This table is the authoritative record list for the counts above."),
       },
     });
+    if (attribution && attribution.applicable) {
+      // Separates "the registry returned this" from "this is a study of the
+      // queried product", which a keyword-matched search result cannot do alone.
+      clNodes.push({
+        kind: "table",
+        table: {
+          id: "trial-attribution",
+          columns: ["Relationship to the query", "Trials", "What establishes it"],
+          rows: attribution.categories.map((c) => [c.label, String(c.count), c.basis]),
+          note:
+            `${attribution.rule} ${attribution.reconciliation_note} ` +
+            `Only the first two rows name the queried product among this record's own ` +
+            `interventions, so only those ${attribution.query_specific_trials} trial(s) are ` +
+            `counted as studies of it. ${attribution.excluded_nct_ids.length} trial(s) are ` +
+            `excluded from any such count.`,
+        },
+      });
+    }
     if (candidates) {
       clNodes.push({
         kind: "prose",
@@ -906,6 +961,55 @@ export function buildReportModel(data: DossierResponse, query: string): ReportMo
     "Sources, Retrieval Metadata and Limitations",
     srcNodes
   );
+
+  // 10. Pre-publication validation. The narrative is model-written, so the gate
+  // that checked it is published with it: a flagged claim stays visible instead
+  // of being quietly rewritten.
+  const validation: ValidationReport | null = data.validation ?? null;
+  if (validation) {
+    const qaNodes: ReportNode[] = [
+      {
+        kind: "kv",
+        entries: [
+          ["Publication", validation.blocked ? "Blocked by the gate" : "Published"],
+          ["Contradictions with retrieved records (errors)", String(validation.errors)],
+          ["Weaker-evidence or incomplete-retrieval notes (warnings)", String(validation.warnings)],
+          ["Rules run", String(validation.rules_run.length)],
+          ["Narrative fields checked", String(validation.checked_fields.length)],
+          ["Gate run at", fmtDateTime(validation.generated_at)],
+        ],
+      },
+    ];
+    if (validation.findings.length) {
+      qaNodes.push({
+        kind: "table",
+        table: {
+          id: "validation-findings",
+          columns: ["Rule", "Severity", "Section", "Passage", "What the record states", "Suggested correction", "Source"],
+          rows: validation.findings.map((f) => [
+            f.rule,
+            f.severity,
+            f.field,
+            f.quote,
+            [f.expected, f.observed].filter(Boolean).join(" — "),
+            f.suggested_correction ?? "",
+            f.source_ref ?? "",
+          ]),
+          note:
+            validation.note +
+            (validation.blocked
+              ? " Publication is blocked: at least one claim contradicts a retrieved record."
+              : ""),
+        },
+      });
+    } else {
+      qaNodes.push({
+        kind: "prose",
+        text: "No claim in the narrative contradicted a retrieved record, and no figure was stated that the derived counts do not support. This is the result of these checks on these records, not a general guarantee about the compound.",
+      });
+    }
+    push("validation", "Pre-Publication Validation", qaNodes, "Machine-readable QA gate over the generated narrative.");
+  }
 
   const displayName = d?.compound_profile?.name ?? query;
 

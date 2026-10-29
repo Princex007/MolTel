@@ -10,7 +10,7 @@ MolTel is a research intelligence platform for pharma and biomedical research. S
 
 The platform retrieves evidence from six public scientific APIs, normalises and ranks it deterministically, then uses a single OpenRouter LLM call to synthesise a structured dossier. The LLM is never the primary source of scientific facts — it only interprets and synthesises retrieved evidence.
 
-Alongside the narrative sections the dossier carries four panels: an evidence-strength tally, a contradictory-findings detector, a clinical trial landscape dashboard, and a research gap finder. Evidence tiers and every trial count are computed from the retrieved records, not by the model.
+Alongside the narrative sections the dossier carries six panels: an evidence-strength tally, a contradictory-findings detector, a clinical trial landscape dashboard, a candidate and company view, a query-attribution breakdown that says which retrieved trials actually register the product, and a validation report that names every claim the records do not support. Evidence tiers and every trial count are computed from the retrieved records, not by the model.
 
 **Example query:** `Clemizole and TRPC5 in Alzheimer's disease`
 
@@ -154,7 +154,7 @@ cd backend
 pytest
 ```
 
-185 tests covering:
+223 tests covering:
 - PubChem / PubMed / Europe PMC / ClinicalTrials / openFDA / UniProt parsers,
   including the dates, identifiers and publication types each source states
 - Evidence normalisation, deduplication on PMID/PMCID/DOI only, and the merge
@@ -174,10 +174,21 @@ pytest
   is not reported as a conflict, labels distinguish observations from hypotheses
 - Orchestrator behaviour when a source fails, returns nothing, or the LLM is
   unavailable
+- Trial attribution by registered intervention, including a placebo arm that
+  carries the product's name, a combination product, and a comparator-only study
+- The dossier regression suite: every defect class found in the 2026-10-29
+  semaglutide report, replayed against fixtures captured from
+  `clinicaltrials.gov/study/NCT…` on that date, so no test reaches the network
 
 External APIs are mocked (`respx`) and the OpenRouter key is never read from the
 developer environment — tests require no network access and consume no AI
-credits.
+credits. One optional test detects registry schema drift by reading five live
+study records; it is skipped unless you ask for it:
+
+```bash
+cd backend
+MOLTEL_LIVE_TESTS=1 pytest -k live_registry
+```
 
 Type-check the frontend with:
 
@@ -254,6 +265,9 @@ disease query is also resolved through the disease ontology.
   "evidence_strength": { "categories": [], "predominant_tier": "clinical", "interpretation": "...", "limitations": [], "unclassified_count": 0, "automated": true },
   "trial_analytics": { "total_trials": 50, "ongoing_trials": 20, "trials_by_phase": [], "trials_by_status": [], "trial_starts_by_period": [], "metadata": { ... } },
   "candidate_analytics": { "candidates": [], "companies": [], "limitations": [] },
+  "query_attribution": { "query": "semaglutide", "distinct_trials": 50, "categories": [], "records": [], "excluded_nct_ids": [], "reconciliation_note": "..." },
+  "validation": { "errors": 0, "warnings": 3, "blocked": false, "findings": [], "rules_run": [], "checked_fields": [], "note": "..." },
+  "publication_blocked": false,
   "disease_analytics": { "concept": { ... }, "subtypes": [], "papers_considered": 0 },
   "literature": { "view": "most_relevant", "rule": "...", "ordered_by": "...", "items": [], "exclusions": [], "facets": [], "deduplication": { ... }, "limitations": [] },
   "retrieved_at": "2026-10-12T00:00:00+00:00"
@@ -395,7 +409,7 @@ All sources are free and public. No proprietary databases are used.
 
 ## Dossier Panels
 
-Four panels sit on top of the retrieved records. Each states its own limits in
+Six panels sit on top of the retrieved records. Each states its own limits in
 the UI rather than relying on the reader to infer them.
 
 | Panel | Computed by | What it refuses to claim |
@@ -404,10 +418,41 @@ the UI rather than relying on the reader to infer them.
 | Contradictory Findings | One AI synthesis call, validated against the payload | Studies measuring different outcomes, models, doses or endpoints are reported as different experimental contexts, not conflicts. Uncited claims are dropped |
 | Clinical Trial Landscape | Deterministically, from deduplicated registry records | Counts never come from the model. Charts that overlap (Ongoing vs Recruiting) are shown separately and are not summed |
 | Research Gap Finder | One AI synthesis call, capped at 3 gaps | A gap is described against the retrieved records only. Absence from the retrieval is not absence from the literature |
+| Query Attribution | Deterministically, from each record's registered interventions | A trial that only mentions the product in its title is not counted as a study of it, and a drug-class relationship is never asserted |
+| Validation Report | Deterministically, against the records the dossier cites | An unsupported claim is named and blocked, never rewritten. See [Dossier Validation Gate](#dossier-validation-gate) |
 
 One LLM call answers both the narrative sections and the contradiction/gap
 panels. If AI synthesis is unavailable, the dossier falls back to a data-only
 report that restates fetched records and says the analysis was unavailable.
+
+---
+
+## Dossier Validation Gate
+
+`services/dossier_validator.py` reads the finished dossier sentence by sentence
+and compares it with the records the same request retrieved. Eighteen rules cover
+five kinds of disagreement: a registry fact stated differently (phase, status,
+population, duration, time point), a relationship the record does not register
+(two products said to be co-administered when the arms keep them apart), a figure
+no retrieved record supports, a citation that is not in the retrieval, and an
+aggregate that does not add up on its own denominator.
+
+A finding carries the rule, the severity, the field and sentence it objects to,
+what the source states, and what would settle it. The gate never edits the
+narrative: silently repairing prose would put the pipeline's guess above the
+source. An `error` sets `blocked` and the response `status` becomes `partial`
+with `publication_blocked: true`, so the browser, the PDF and the CSV all say the
+same thing — the reader sees the claim, the objection and the record that decides
+it. A `warning` marks weaker evidence, such as a rodent finding whose human
+relevance the retrieval cannot settle.
+
+The same structured fields that settle the argument are handed to the model
+before it writes: registry phase and status per trial, the arm and intervention
+list per study, the outcome measures and their stated time points, the mutually
+exclusive attribution categories, and every count with its denominator. The
+narrative is asked to use those figures rather than estimate them, which is why a
+fresh dossier's findings are usually the model's wording choices rather than its
+arithmetic.
 
 ---
 

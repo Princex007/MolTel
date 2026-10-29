@@ -8,8 +8,10 @@ from typing import Optional
 
 from models.schemas import (
     ClinicalTrial,
+    TrialArmGroup,
     TrialCollaborator,
     TrialIntervention,
+    TrialOutcome,
     TrialRetrievalMetadata,
 )
 from services import trial_taxonomy
@@ -113,6 +115,37 @@ async def search_trials(query: str, max_results: int = 50) -> list[ClinicalTrial
     return trials
 
 
+_OUTCOME_MEASURE_CAP = 20
+
+
+def _parse_outcomes(module: dict) -> tuple[list[TrialOutcome], list[str]]:
+    """Read the outcome list the registry publishes, with its stated time frames.
+
+    Records can list dozens of secondary measures, so only the first measures are
+    kept for reading, while every distinct time frame is retained: the duration
+    check needs the full set of time points a study actually reads, and dropping
+    one would turn a supported claim into a flagged one.
+    """
+    outcomes: list[TrialOutcome] = []
+    frames: list[str] = []
+    for category, key in (
+        ("primary", "primaryOutcomes"),
+        ("secondary", "secondaryOutcomes"),
+    ):
+        for item in module.get(key) or []:
+            if not isinstance(item, dict):
+                continue
+            measure = (item.get("measure") or "").strip()
+            if not measure:
+                continue
+            if len(outcomes) < _OUTCOME_MEASURE_CAP:
+                outcomes.append(TrialOutcome(measure=measure, category=category))
+            frame = (item.get("timeFrame") or "").strip()
+            if frame and frame not in frames:
+                frames.append(frame)
+    return outcomes, frames
+
+
 def _parse_study(study: dict, retrieved_at: str) -> ClinicalTrial | None:
     """Parse a single study dict from ClinicalTrials.gov v2 API."""
     try:
@@ -122,6 +155,7 @@ def _parse_study(study: dict, retrieved_at: str) -> ClinicalTrial | None:
         design_module = protocol.get("designModule", {})
         cond_module = protocol.get("conditionsModule", {})
         arms_module = protocol.get("armsInterventionsModule", {})
+        outcomes_module = protocol.get("outcomesModule", {})
         sponsor_module = protocol.get("sponsorCollaboratorsModule", {})
         desc_module = protocol.get("descriptionModule", {})
 
@@ -144,13 +178,57 @@ def _parse_study(study: dict, retrieved_at: str) -> ClinicalTrial | None:
             i for i in arms_module.get("interventions", []) if isinstance(i, dict) and i.get("name")
         ]
         interventions: list[str] = [i["name"].strip() for i in raw_interventions]
-        intervention_details: list[TrialIntervention] = [
-            TrialIntervention(
-                name=i["name"].strip(),
-                type=(i.get("type") or "").strip().upper() or None,
+        # The registry states an intervention's role only through the arm it sits
+        # in, so the arm list is read first and each intervention is linked to the
+        # arm types that name it. A role is never guessed from the name wording.
+        arm_groups: list[TrialArmGroup] = [
+            TrialArmGroup(
+                label=(group.get("label") or "").strip(),
+                type=(group.get("type") or "").strip().upper() or None,
+                intervention_names=[
+                    str(n).strip()
+                    for n in (group.get("interventionNames") or [])
+                    if str(n).strip()
+                ],
             )
-            for i in raw_interventions
+            for group in arms_module.get("armGroups", []) or []
+            if isinstance(group, dict) and (group.get("label") or "").strip()
         ]
+        # armGroupLabels links intervention -> arm; a record can also state the
+        # link only on the arm side, so both directions are honoured.
+        role_by_label: dict[str, str] = {
+            group.label: group.type for group in arm_groups if group.type
+        }
+
+        def _role_for(detail: dict, labels: list[str]) -> Optional[str]:
+            # The arm lists interventions as "Drug: Semaglutide"; the case the
+            # registry picks for the type is not a second identifier.
+            own = f"{(detail.get('type') or '').strip()}: {detail['name'].strip()}".casefold()
+            for group in arm_groups:
+                if any(own == listed.casefold() for listed in group.intervention_names):
+                    return group.type
+            for label in labels:
+                if label in role_by_label:
+                    return role_by_label[label]
+            return None
+
+        intervention_details: list[TrialIntervention] = []
+        for i in raw_interventions:
+            labels = [
+                str(label).strip()
+                for label in (i.get("armGroupLabels") or [])
+                if str(label).strip()
+            ]
+            intervention_details.append(
+                TrialIntervention(
+                    name=i["name"].strip(),
+                    type=(i.get("type") or "").strip().upper() or None,
+                    description=(i.get("description") or "").strip() or None,
+                    arm_group_labels=labels,
+                    role=_role_for(i, labels),
+                )
+            )
+        outcomes, time_frames = _parse_outcomes(outcomes_module)
         sponsor: str = sponsor_module.get("leadSponsor", {}).get("name", "")
         # Collaborators are recorded by the registry as partners of the sponsor.
         # They are kept because they are source facts, not because they identify
@@ -176,7 +254,10 @@ def _parse_study(study: dict, retrieved_at: str) -> ClinicalTrial | None:
             conditions=conditions,
             interventions=interventions,
             intervention_details=intervention_details,
+            arm_groups=arm_groups,
             collaborators=collaborators,
+            outcomes=outcomes,
+            outcome_time_frames=time_frames,
             sponsor=sponsor or None,
             study_type=study_type or None,
             url=url,

@@ -64,6 +64,57 @@ ONGOING_STATUSES = frozenset(
     {"RECRUITING", "ENROLLING_BY_INVITATION", "ACTIVE_NOT_RECRUITING"}
 )
 
+# Registry arm roles that mean "this arm receives the product as a comparator".
+# OTHER is deliberately absent: the registry does not say what an OTHER arm is, so
+# calling it a comparator would be a claim the source never makes.
+COMPARATOR_ROLES = frozenset(
+    {"PLACEBO_COMPARATOR", "ACTIVE_COMPARATOR", "SHAM_COMPARATOR"}
+)
+# Roles that state the arm is a masked control, used when a placebo arm is asked
+# for by name rather than as a comparator.
+MASKED_ROLES = frozenset({"PLACEBO_COMPARATOR", "SHAM_COMPARATOR"})
+
+# One derived group: the single place its membership is declared, so a heading,
+# a chart legend and a KPI tile cannot each describe it differently.
+RECRUITING_CATEGORY = "currently_recruiting"
+ONGOING_CATEGORY = "ongoing"
+
+_CATEGORY_MEMBERS: dict[str, tuple[str, ...]] = {
+    category: tuple(
+        code
+        for code, mapped in _STATUS_TO_CATEGORY.items()
+        if mapped == category
+    )
+    for category in STATUS_CATEGORY_LABELS
+}
+
+
+def status_group_members(category: str) -> tuple[str, ...]:
+    """Exact registry statuses folded into one dashboard category.
+
+    Empty for a category the map never assigns, so a derived group can never
+    claim members that no record can reach.
+    """
+    return _CATEGORY_MEMBERS.get(category, ())
+
+
+def status_group_definition(category: str) -> str:
+    """The mapping sentence shown beside every derived count."""
+    members = status_group_members(category)
+    label = STATUS_CATEGORY_LABELS.get(category, category)
+    if not members:
+        return f"{label}: no registry status maps here in this build."
+    names = ", ".join(STATUS_LABELS.get(code, code) for code in members)
+    return f"{label} = registry statuses: {names}."
+
+
+def ongoing_definition() -> str:
+    members = ", ".join(STATUS_LABELS[s] for s in sorted(ONGOING_STATUSES))
+    return (
+        f"Ongoing = registry status is one of: {members}. It is a re-cut of the "
+        "same records and is never added to the raw status totals."
+    )
+
 
 def normalize_status(value: Optional[str]) -> str:
     """Return the registry code for a status, or the upper-cased input if unknown."""
